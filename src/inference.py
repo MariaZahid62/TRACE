@@ -11,6 +11,7 @@ import argparse
 
 import torch
 import torchaudio
+import soundfile as sf
 
 from src.dataset import FeatureExtractor, VOCAB_SIZE
 from src.decoder import greedy_decode
@@ -36,7 +37,13 @@ def load_model(checkpoint_path: str, device: torch.device) -> DeepSpeechLite:
 
 
 def transcribe(model, cfg, audio_path: str, device: torch.device) -> str:
-    waveform, sample_rate = torchaudio.load(audio_path)
+    data, sample_rate = sf.read(audio_path, dtype="float32")
+    waveform = torch.from_numpy(data)
+
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    else:
+        waveform = waveform.transpose(0, 1)
     target_sr = cfg["data"]["sample_rate"]
     if sample_rate != target_sr:
         waveform = torchaudio.functional.resample(waveform, sample_rate, target_sr)

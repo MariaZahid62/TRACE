@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# DeepSpeech-Lite training configuration
+# ---------------------------------------------------------------------------
+
+data:
+  root: "data"                 # where LibriSpeech gets downloaded/cached
+  train_split: "dev-clean"
+  dev_split: "dev-clean"
+  sample_rate: 16000
+  n_mels: 80
+  n_fft: 400
+  hop_length: 160
+  win_length: 400
+
+model:
+  n_mels: 80
+  cnn_channels: [32, 32]
+  rnn_hidden_size: 512
+  rnn_layers: 5
+  bidirectional: true
+  dropout: 0.1
+
+training:
+  batch_size: 2
+  num_workers: 0
+  epochs: 1
+  lr: 0.0003
+  weight_decay: 0.00001
+  grad_clip: 5.0
+  scheduler_step: 5
+  scheduler_gamma: 0.7
+  seed: 42
+  checkpoint_dir: "checkpoints"
+  log_every_n_steps: 50
+  amp: true                    # mixed precision training
+
+decoding:
+  method: "greedy"             # "greedy" or "beam" (beam requires ctcdecode/kenlm, not included)
+  beam_width: 10
