@@ -1,3 +1,4 @@
+
 """
 Training entry point for DeepSpeech-Lite.
 
@@ -14,10 +15,15 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import yaml
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
-from src.dataset import LibriSpeechASRDataset, FeatureExtractor, VOCAB_SIZE, collate_fn, indices_to_text
+from src.dataset import (
+    LibriSpeechASRDataset,
+    FeatureExtractor,
+    VOCAB_SIZE,
+    collate_fn,
+)
 from src.decoder import greedy_decode, batch_wer_cer
 from src.model import DeepSpeechLite
 from src.utils import set_seed, AverageMeter, save_history, get_device
@@ -31,8 +37,30 @@ def build_dataloaders(cfg: dict):
         hop_length=cfg["data"]["hop_length"],
         win_length=cfg["data"]["win_length"],
     )
-    train_ds = LibriSpeechASRDataset(cfg["data"]["root"], cfg["data"]["train_split"], fe)
-    dev_ds = LibriSpeechASRDataset(cfg["data"]["root"], cfg["data"]["dev_split"], fe)
+
+    train_ds = LibriSpeechASRDataset(
+        cfg["data"]["root"], cfg["data"]["train_split"], fe
+    )
+    dev_ds = LibriSpeechASRDataset(
+        cfg["data"]["root"], cfg["data"]["dev_split"], fe
+    )
+
+    # Limit dataset size for small training experiments
+    train_samples = cfg["training"].get("train_samples")
+    dev_samples = cfg["training"].get("dev_samples")
+
+    if train_samples is not None:
+        train_ds = Subset(
+            train_ds, range(min(train_samples, len(train_ds)))
+        )
+
+    if dev_samples is not None:
+        dev_ds = Subset(
+            dev_ds, range(min(dev_samples, len(dev_ds)))
+        )
+
+    print(f"Training samples: {len(train_ds)}")
+    print(f"Validation samples: {len(dev_ds)}")
 
     train_loader = DataLoader(
         train_ds,
@@ -42,6 +70,7 @@ def build_dataloaders(cfg: dict):
         collate_fn=collate_fn,
         drop_last=True,
     )
+
     dev_loader = DataLoader(
         dev_ds,
         batch_size=cfg["training"]["batch_size"],
@@ -49,6 +78,7 @@ def build_dataloaders(cfg: dict):
         num_workers=cfg["training"]["num_workers"],
         collate_fn=collate_fn,
     )
+
     return train_loader, dev_loader
 
 
@@ -58,12 +88,18 @@ def evaluate(model, dev_loader, device, criterion):
     all_hyps, all_refs = [], []
 
     with torch.no_grad():
-        for features, targets, input_lengths, target_lengths, transcripts in tqdm(dev_loader, desc="eval", leave=False):
+        for features, targets, input_lengths, target_lengths, transcripts in tqdm(
+            dev_loader, desc="eval", leave=False
+        ):
             features = features.to(device)
             targets = targets.to(device)
 
-            log_probs, output_lengths = model(features, input_lengths.to(device))
-            loss = criterion(log_probs, targets, output_lengths.cpu(), target_lengths)
+            log_probs, output_lengths = model(
+                features, input_lengths.to(device)
+            )
+            loss = criterion(
+                log_probs, targets, output_lengths.cpu(), target_lengths
+            )
             loss_meter.update(loss.item(), n=features.size(0))
 
             hyps = greedy_decode(log_probs.cpu(), output_lengths.cpu())
@@ -104,12 +140,20 @@ def train(cfg: dict, eval_only: bool = False, checkpoint: str | None = None):
         return
 
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=cfg["training"]["lr"], weight_decay=cfg["training"]["weight_decay"]
+        model.parameters(),
+        lr=cfg["training"]["lr"],
+        weight_decay=cfg["training"]["weight_decay"],
     )
+
     scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=cfg["training"]["scheduler_step"], gamma=cfg["training"]["scheduler_gamma"]
+        optimizer,
+        step_size=cfg["training"]["scheduler_step"],
+        gamma=cfg["training"]["scheduler_gamma"],
     )
-    scaler = torch.cuda.amp.GradScaler(enabled=cfg["training"]["amp"] and device.type == "cuda")
+
+    scaler = torch.cuda.amp.GradScaler(
+        enabled=cfg["training"]["amp"] and device.type == "cuda"
+    )
 
     ckpt_dir = Path(cfg["training"]["checkpoint_dir"])
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -121,42 +165,88 @@ def train(cfg: dict, eval_only: bool = False, checkpoint: str | None = None):
         model.train()
         loss_meter = AverageMeter()
 
-        pbar = tqdm(train_loader, desc=f"epoch {epoch}/{cfg['training']['epochs']}")
-        for step, (features, targets, input_lengths, target_lengths, _) in enumerate(pbar):
+        pbar = tqdm(
+            train_loader,
+            desc=f"epoch {epoch}/{cfg['training']['epochs']}",
+        )
+
+        for step, (
+            features, targets, input_lengths, target_lengths, _
+        ) in enumerate(pbar):
+
             features = features.to(device)
             targets = targets.to(device)
 
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=cfg["training"]["amp"] and device.type == "cuda"):
-                log_probs, output_lengths = model(features, input_lengths.to(device))
-                loss = criterion(log_probs, targets, output_lengths.cpu(), target_lengths)
+
+            with torch.cuda.amp.autocast(
+                enabled=cfg["training"]["amp"] and device.type == "cuda"
+            ):
+                log_probs, output_lengths = model(
+                    features, input_lengths.to(device)
+                )
+                loss = criterion(
+                    log_probs, targets, output_lengths.cpu(), target_lengths
+                )
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["training"]["grad_clip"])
+
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), cfg["training"]["grad_clip"]
+            )
+
             scaler.step(optimizer)
             scaler.update()
 
             loss_meter.update(loss.item(), n=features.size(0))
+
             if step % cfg["training"]["log_every_n_steps"] == 0:
                 pbar.set_postfix(loss=f"{loss_meter.avg:.4f}")
 
         scheduler.step()
-        dev_loss, wer, cer = evaluate(model, dev_loader, device, criterion)
 
-        print(f"Epoch {epoch}: train_loss={loss_meter.avg:.4f} dev_loss={dev_loss:.4f} WER={wer:.3f} CER={cer:.3f}")
+        dev_loss, wer, cer = evaluate(
+            model, dev_loader, device, criterion
+        )
+
+        print(
+            f"Epoch {epoch}: train_loss={loss_meter.avg:.4f} "
+            f"dev_loss={dev_loss:.4f} WER={wer:.3f} CER={cer:.3f}"
+        )
 
         history["train_loss"].append(loss_meter.avg)
         history["dev_loss"].append(dev_loss)
         history["wer"].append(wer)
         history["cer"].append(cer)
+
         save_history(history, ckpt_dir / "history.json")
 
-        torch.save({"model_state_dict": model.state_dict(), "epoch": epoch, "cfg": cfg}, ckpt_dir / "last.pt")
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "epoch": epoch,
+                "cfg": cfg,
+            },
+            ckpt_dir / "last.pt",
+        )
+
         if wer < best_wer:
             best_wer = wer
-            torch.save({"model_state_dict": model.state_dict(), "epoch": epoch, "cfg": cfg}, ckpt_dir / "best.pt")
-            print(f"  -> new best WER {wer:.3f}, saved checkpoints/best.pt")
+
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "epoch": epoch,
+                    "cfg": cfg,
+                },
+                ckpt_dir / "best.pt",
+            )
+
+            print(
+                f"  -> new best WER {wer:.3f}, "
+                "saved checkpoints/best.pt"
+            )
 
 
 def main():
@@ -164,6 +254,7 @@ def main():
     parser.add_argument("--config", type=str, default="configs/config.yaml")
     parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--checkpoint", type=str, default=None)
+
     args = parser.parse_args()
 
     with open(args.config) as f:

@@ -88,18 +88,13 @@ class LibriSpeechASRDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        base_dataset = self.dataset.dataset
-
-        # Get the original index before Subset
-        original_idx = self.dataset.indices[idx]
-
-        # Get LibriSpeech metadata
-        metadata = base_dataset.get_metadata(original_idx)
+        # Get LibriSpeech metadata directly
+        metadata = self.dataset.get_metadata(idx)
 
         # metadata[0] = actual relative audio path
         # Example:
         # dev-clean/1272/128104/1272-128104-0000.flac
-        file_path = Path(base_dataset._archive) / metadata[0]
+        file_path = Path(self.dataset._archive) / metadata[0]
 
         # metadata[1] = sample rate
         # metadata[2] = transcript
