@@ -155,7 +155,7 @@ with gr.Blocks(title="TRACE Speech Recognition") as demo:
         )
 
         reference_output = gr.Textbox(
-            label="Verified Reference Transcript",
+            label="Verified Transcript",
             lines=3
         )
 
